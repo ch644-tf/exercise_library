@@ -1,13 +1,13 @@
 #include "functions.h"
-#include <bits/pthreadtypes.h>
 #include <locale.h>
 #include <math.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
 struct ret_type_t *ret_type(void) {
-  struct ret_type_t *ret = malloc(sizeof(ret_type_t));
+  struct ret_type_t *ret = (struct ret_type_t*) malloc(sizeof(ret_type_t));
   ret->buffer = malloc(RET_TYPE_BUFFER_SIZE);
   ret->retError = OK;
   return ret;
@@ -29,10 +29,11 @@ unsigned char checkValidCharacter(char check) {
          !isWhitespace;
 }
 
-struct ret_type_t *convertString(const char *string) {
+struct ret_type_t *convertString(const char *string,
+                                 unsigned char forceSigned) {
   size_t numCharacters = strlen(string);
   struct ret_type_t *result = ret_type();
-  unsigned char signedBool;
+  unsigned char signedBool = forceSigned;
   if (numCharacters > 20) {
     fprintf(
         stderr,
@@ -41,7 +42,7 @@ struct ret_type_t *convertString(const char *string) {
     result->retError = BUFFER_OVERFLOW;
     return result;
   } else if (numCharacters == 20) {
-    if (string[0] == '-') {
+    if (signedBool || string[0] == '-') {
       goto signed_result;
     }
     signedBool = 0;
@@ -188,28 +189,30 @@ struct ret_type_t *convertUnsignedInteger(unsigned long long int integer) {
   return result;
 }
 
-//input should be {pthread_mutex_t*, pthread_mutex_t*,char*,FILE*,const unsigned int*}
+// input should be {pthread_mutex_t*, pthread_mutex_t*,char*,FILE*,const
+// unsigned int*}
 void *parseLine(void *input) {
   // copy input to local buffer to prevent race conditions between other threads
   // (yes this was a problem)
   pthread_mutex_lock(((pthread_mutex_t **)input)[0]);
   char buffer[BUFFER_SIZE];
-  memcpy(buffer, ((void**) input)[2], BUFFER_SIZE);
+  memcpy(buffer, ((void **)input)[2], BUFFER_SIZE);
   pthread_mutex_unlock(((pthread_mutex_t **)input)[0]);
   // create other variables
   void **input_array = (void **)input;
-  pthread_mutex_t *output_lock = (pthread_mutex_t*) input_array[1];
+  proof_t* proof = (proof_t*) input_array[5];
+  pthread_mutex_t *output_lock = (pthread_mutex_t *)input_array[1];
   FILE *output = (FILE *)input_array[3];
-  const unsigned int numVars = *(const unsigned int*)input_array[4];
-  enum error *result = malloc(sizeof(enum error));
+  const unsigned int numVars = *(const unsigned int *)input_array[4];
+  enum error *result = (enum error*) malloc(sizeof(enum error));
   *result = OK;
-  char **tokens = malloc(sizeof(char *));
+  char **tokens = (char**) malloc(sizeof(char *));
   // split input string into tokens and store in tokens
   tokens[0] = strtok(buffer, " ");
   size_t numTokens = 1;
   while (tokens[numTokens - 1] && strcmp(tokens[numTokens - 1], "0")) {
     numTokens++;
-    tokens = realloc(tokens, numTokens * sizeof(char *));
+    tokens = (char**) realloc(tokens, numTokens * sizeof(char *));
     tokens[numTokens - 1] = strtok(NULL, " ");
   }
   // check if comment
@@ -218,14 +221,18 @@ void *parseLine(void *input) {
   }
 
   // convert string tokens into variables
-  long long int *variables = malloc(sizeof(long long int) * numTokens);
+  long long int *variables = (long long int*)  malloc(sizeof(long long int) * numTokens);
+  struct clause_t *clause = (clause_t *)malloc(sizeof(clause_t));
+  *clause = makeClause();
+  clause->variables = variables;
+  clause->numVars = numTokens - 1;
   if (variables == 0) {
     *result = EMPTY_BUFFER;
     return result;
   }
   struct ret_type_t *function_return;
-  for (size_t index = 0; index < numTokens - 1; index++) {
-    function_return = convertString(tokens[index]);
+  for (size_t index = 0; index < clause->numVars; index++) {
+    function_return = convertString(tokens[index], 0);
     variables[index] = *((unsigned long long int *)function_return->buffer);
     if (variables[index] > numVars) {
       *result = INVALID_CHAR;
@@ -240,6 +247,9 @@ void *parseLine(void *input) {
   pthread_mutex_lock(output_lock);
   fprintf(output, "(");
   for (size_t index = 0; index < numTokens - 2; index++) {
+    if (variables[index] > numVars) {
+      *result = OVERFLOW;
+    }
     if (variables[index] >= 0) {
       if (fprintf(output, "%lli %lc ", variables[index], L'∨') < 0) {
         perror("fprintf");
@@ -254,9 +264,9 @@ void *parseLine(void *input) {
     }
   }
   fprintf(output, "%lli) %lc\n", variables[numTokens - 2], L'∧');
+  addClause(proof, clause);
   pthread_mutex_unlock(output_lock);
 
-  free(variables);
   return result;
 }
 
@@ -268,22 +278,22 @@ enum error printErrorFile(enum error inputError, FILE *outputFile) {
   fprintf(outputFile, "%sERROR%s: ", ERROR_TEXT_COLOR, RETURN_TEXT_COLOR);
   switch (inputError) {
   case BUFFER_OVERFLOW:
-    fprintf(outputFile,"Attempted out of bounds read/write of buffer");
+    fprintf(outputFile, "Attempted out of bounds read/write of buffer");
     break;
   case OVERFLOW:
-    fprintf(outputFile,"Caught an integer overflow");
+    fprintf(outputFile, "Caught an integer overflow");
     break;
   case UNDERFLOW:
-    fprintf(outputFile,"Caught an integer underflow");
+    fprintf(outputFile, "Caught an integer underflow");
     break;
   case INVALID_CHAR:
-    fprintf(outputFile,"Invalid input");
+    fprintf(outputFile, "Invalid input");
     break;
   case EMPTY_BUFFER:
     fprintf(outputFile, "Buffer was malformed or null");
     break;
   default:
-    fprintf(outputFile, "Unknown error or no error: %d",inputError);
+    fprintf(outputFile, "Unknown error or no error: %d", inputError);
     break;
   }
   fprintf(outputFile, "\n");
@@ -298,37 +308,37 @@ FILE *openFile(const char *path, const char *args) {
   return output;
 }
 
-FILE *openAppendFile(const char *path) {
-  return openFile(path, "a");
-}
+FILE *openAppendFile(const char *path) { return openFile(path, "a"); }
 
-FILE *openWriteFile(const char *path) {
-  return openFile(path, "w");
-}
+FILE *openWriteFile(const char *path) { return openFile(path, "w"); }
 
-FILE *openReadFile(const char *path) {
-  return openFile(path, "r");
-}
+FILE *openReadFile(const char *path) { return openFile(path, "r"); }
 
-enum error parseDIMCAS(FILE *inputFile, FILE *outputFile, size_t numThreads) {
+struct ret_type_t* parseDIMACS(FILE *inputFile, FILE *outputFile, size_t numThreads) {
   char *oldLocale = setlocale(LC_ALL, NULL);
   setlocale(LC_ALL, "C.UTF-8");
   pthread_mutex_t buffer_lock, output_lock;
   pthread_mutex_init(&buffer_lock, NULL);
   pthread_mutex_init(&output_lock, NULL);
   char buffer[BUFFER_SIZE];
-  char *lineOne[] = {malloc(sizeof(char) * 3), malloc(sizeof(char) * 5),
-                     malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2),
-                     malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2)};
+  char *lineOne[] = {(char*) malloc(sizeof(char) * 3), (char*) malloc(sizeof(char) * 5),
+		     (char*)  malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2),
+                     (char*) malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2)};
   pthread_t threadIDArray[numThreads];
   unsigned char count = 0;
   enum error *return_error;
-  enum error result = OK;
-  void *thread_function_input[5];
+  struct proof_t* proof = (struct proof_t*) malloc(sizeof(proof_t));
+  *proof = initProof();
+  struct ret_type_t *result = ret_type();
+  free(result->buffer);
+  result->buffer = (void*) proof;
+  void *thread_function_input[6];
   char scan_string[50];
   struct ret_type_t
       *function_return; // function_return = convertString(lineOne[2])
   unsigned int numClauses;
+  unsigned int NUM_VARIABLES;
+  unsigned int NUM_CLAUSES;
   fgets(buffer, BUFFER_SIZE, inputFile);
   while (buffer[0] == 'c' || buffer[0] == 'C') {
     fgets(buffer, BUFFER_SIZE, inputFile);
@@ -337,22 +347,22 @@ enum error parseDIMCAS(FILE *inputFile, FILE *outputFile, size_t numThreads) {
           (BUFFER_SIZE - 8) / 2, (BUFFER_SIZE - 8) / 2);
   if (!sscanf(buffer, scan_string, lineOne[0], lineOne[1], lineOne[2],
               lineOne[3])) {
-    result = printError(INVALID_CHAR);
+    result->retError = printError(INVALID_CHAR);
     goto freeLineOne;
   }
-  function_return = convertString(lineOne[2]);
+  function_return = convertString(lineOne[2], 0);
   if (function_return->retError) {
-    result = printError(function_return->retError);
+    result->retError = printError(function_return->retError);
     goto freeRetType;
   }
-  const unsigned int NUM_VARIABLES = *(unsigned int *)function_return->buffer;
+  NUM_VARIABLES = *(unsigned int *)function_return->buffer;
   destroyRetType(&function_return);
-  function_return = convertString(lineOne[3]);
+  function_return = convertString(lineOne[3], 0);
   if (function_return->retError) {
-    result = printError(function_return->retError);
+    result->retError = printError(function_return->retError);
     goto freeRetType;
   }
-  const unsigned int NUM_CLAUSES = *(unsigned int *)function_return->buffer;
+  NUM_CLAUSES = *(unsigned int *)function_return->buffer;
   numClauses = NUM_CLAUSES;
   destroyRetType(&function_return);
   while (numClauses) {
@@ -361,21 +371,23 @@ enum error parseDIMCAS(FILE *inputFile, FILE *outputFile, size_t numThreads) {
       fgets(buffer, BUFFER_SIZE, inputFile);
       pthread_mutex_unlock(&buffer_lock);
       if (removeTrailingZero(buffer)) {
-	result = printError(BUFFER_OVERFLOW);
+        result->retError = printError(BUFFER_OVERFLOW);
       }
       thread_function_input[0] = (void *)&buffer_lock;
       thread_function_input[1] = (void *)&output_lock;
       thread_function_input[2] = (void *)buffer;
       thread_function_input[3] = (void *)outputFile;
       thread_function_input[4] = (void *)&NUM_VARIABLES;
-      pthread_create(&threadIDArray[count], NULL, parseLine,(void*) thread_function_input);
+      thread_function_input[5] = (void*) proof;
+      pthread_create(&threadIDArray[count], NULL, parseLine,
+                     (void *)thread_function_input);
     }
     for (; count; count--) {
       pthread_join(threadIDArray[count - 1], (void **)&return_error);
       numClauses--;
       if (*return_error) {
-        result = printError(*return_error);
-	goto freeReturnError;
+        result->retError = printError(*return_error);
+        goto freeReturnError;
       }
       free(return_error);
       return_error = NULL;
@@ -383,27 +395,27 @@ enum error parseDIMCAS(FILE *inputFile, FILE *outputFile, size_t numThreads) {
   }
 
 freeReturnError:
-  if(return_error != NULL){
+  if (return_error != NULL) {
     free(return_error);
     return_error = NULL;
   }
 freeRetType:
-  if(function_return != NULL){
+  if (function_return != NULL) {
     destroyRetType(&function_return);
   }
- freeLineOne:
-   pthread_mutex_destroy(&buffer_lock);
-   pthread_mutex_destroy(&output_lock);
-   free(lineOne[0]);
-   lineOne[0] = NULL;
-   free(lineOne[1]);
-   lineOne[1] = NULL;
-   free(lineOne[2]);
-   lineOne[2] = NULL;
-   free(lineOne[3]);
-   lineOne[3] = NULL;
-   setlocale(LC_ALL, oldLocale);
-   return result;
+freeLineOne:
+  pthread_mutex_destroy(&buffer_lock);
+  pthread_mutex_destroy(&output_lock);
+  free(lineOne[0]);
+  lineOne[0] = NULL;
+  free(lineOne[1]);
+  lineOne[1] = NULL;
+  free(lineOne[2]);
+  lineOne[2] = NULL;
+  free(lineOne[3]);
+  lineOne[3] = NULL;
+  setlocale(LC_ALL, oldLocale);
+  return result;
 }
 
 enum error removeTrailingZero(char *input) {
@@ -418,4 +430,94 @@ enum error removeTrailingZero(char *input) {
     }
   }
   return INVALID_CHAR;
+}
+
+enum error addClause(struct proof_t *proof, struct clause_t *toAdd) {
+  if (proof->head == NULL) {
+    pthread_mutex_lock(&proof->proofMutex);
+    proof->head = toAdd;
+    pthread_mutex_unlock(&proof->proofMutex);
+    return OK;
+  }
+  if (proof->tail == NULL) {
+    if (proof->head->neighbors[1] != NULL) {
+      return BUFFER_OVERFLOW;
+    } else {
+      pthread_mutex_lock(&proof->proofMutex);
+      proof->tail = toAdd;
+      proof->head->neighbors[1] = toAdd;
+      pthread_mutex_unlock(&proof->proofMutex);
+    }
+  }
+
+  pthread_mutex_lock(&proof->proofMutex);
+  proof->tail->neighbors[1] = toAdd;
+  proof->tail = toAdd;
+  pthread_mutex_unlock(&proof->proofMutex);
+  return OK;
+}
+
+proof_t initProof() {
+  proof_t output = {.head = NULL, .tail = NULL};
+  pthread_mutex_init(&output.proofMutex, NULL);
+  return output;
+}
+
+enum error removeClause(proof_t *proof, size_t toRemoveIndex) {
+  clause_t* toRemove = proof->head;
+  if (toRemoveIndex == 0) {
+    pthread_mutex_lock(&proof->proofMutex);
+    proof->head = proof->head->neighbors[1];
+    proof->head->neighbors[0] = NULL;
+    pthread_mutex_unlock(&proof->proofMutex);
+    free(toRemove);
+    return OK;
+  }
+  size_t index = 0;
+  for (; index < toRemoveIndex && toRemove; index++) {
+    toRemove = toRemove->neighbors[1];
+  }
+  pthread_mutex_lock(&proof->proofMutex);
+  if (toRemove->neighbors[1] != NULL) {
+    toRemove->neighbors[1]->neighbors[0] = toRemove->neighbors[0];
+  } else {
+    proof->tail = toRemove->neighbors[0];
+  }
+  toRemove->neighbors[0]->neighbors[1] = toRemove->neighbors[1];
+  pthread_mutex_unlock(&proof->proofMutex);
+  free(toRemove);
+  return OK;
+}
+
+void destroyProof(proof_t *toDestroy) {
+  clause_t *toRemove = toDestroy->head;
+  while (toRemove) {
+    toDestroy->head = toDestroy->head->neighbors[1];
+    if(toRemove->variables){
+      free(toRemove->variables);
+    }
+    free(toRemove);
+    toRemove = toDestroy->head;
+  }
+  pthread_mutex_destroy(&toDestroy->proofMutex);
+}
+
+clause_t *getClause(const proof_t * extractFrom, size_t indexToExtract) {
+  struct clause_t *output = extractFrom->head;
+  for (size_t index = 0; output; index++) {
+    output = output->neighbors[1];
+    if (index == indexToExtract) {
+      return output;
+    }
+  }
+  return NULL;
+}
+
+clause_t makeClause(void) {
+  struct clause_t output = {.neighbors = {NULL, NULL},
+                            .numVars = 0,
+                            .resolved = 0,
+                            .resolvedFrom = NULL,
+                            .variables = NULL};
+  return output;
 }
