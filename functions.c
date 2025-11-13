@@ -326,7 +326,7 @@ struct ret_type_t* parseDIMACS(FILE *inputFile, FILE *outputFile, size_t numThre
                      (char*) malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2)};
   pthread_t threadIDArray[numThreads];
   unsigned char count = 0;
-  enum error *return_error;
+  enum error *return_error = NULL;
   struct proof_t* proof = (struct proof_t*) malloc(sizeof(proof_t));
   *proof = initProof();
   struct ret_type_t *result = ret_type();
