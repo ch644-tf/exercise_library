@@ -7,7 +7,7 @@
 #include <string.h>
 
 struct ret_type_t *ret_type(void) {
-  struct ret_type_t *ret = (struct ret_type_t*) malloc(sizeof(ret_type_t));
+  struct ret_type_t *ret = (struct ret_type_t *)malloc(sizeof(ret_type_t));
   ret->buffer = malloc(RET_TYPE_BUFFER_SIZE);
   ret->retError = OK;
   return ret;
@@ -29,8 +29,7 @@ unsigned char checkValidCharacter(char check) {
          !isWhitespace;
 }
 
-struct ret_type_t *convertString(const char *string,
-                                 unsigned char forceSigned) {
+struct ret_type_t *convertString(const char *string, bool forceSigned) {
   size_t numCharacters = strlen(string);
   struct ret_type_t *result = ret_type();
   unsigned char signedBool = forceSigned;
@@ -200,19 +199,19 @@ void *parseLine(void *input) {
   pthread_mutex_unlock(((pthread_mutex_t **)input)[0]);
   // create other variables
   void **input_array = (void **)input;
-  proof_t* proof = (proof_t*) input_array[5];
+  proof_t *proof = (proof_t *)input_array[5];
   pthread_mutex_t *output_lock = (pthread_mutex_t *)input_array[1];
   FILE *output = (FILE *)input_array[3];
   const unsigned int numVars = *(const unsigned int *)input_array[4];
-  enum error *result = (enum error*) malloc(sizeof(enum error));
+  enum error *result = (enum error *)malloc(sizeof(enum error));
   *result = OK;
-  char **tokens = (char**) malloc(sizeof(char *));
+  char **tokens = (char **)malloc(sizeof(char *));
   // split input string into tokens and store in tokens
   tokens[0] = strtok(buffer, " ");
   size_t numTokens = 1;
   while (tokens[numTokens - 1] && strcmp(tokens[numTokens - 1], "0")) {
     numTokens++;
-    tokens = (char**) realloc(tokens, numTokens * sizeof(char *));
+    tokens = (char **)realloc(tokens, numTokens * sizeof(char *));
     tokens[numTokens - 1] = strtok(NULL, " ");
   }
   // check if comment
@@ -221,7 +220,8 @@ void *parseLine(void *input) {
   }
 
   // convert string tokens into variables
-  long long int *variables = (long long int*)  malloc(sizeof(long long int) * numTokens);
+  long long int *variables =
+      (long long int *)malloc(sizeof(long long int) * numTokens);
   struct clause_t *clause = (clause_t *)malloc(sizeof(clause_t));
   *clause = makeClause();
   clause->variables = variables;
@@ -314,24 +314,29 @@ FILE *openWriteFile(const char *path) { return openFile(path, "w"); }
 
 FILE *openReadFile(const char *path) { return openFile(path, "r"); }
 
-struct ret_type_t* parseDIMACS(FILE *inputFile, FILE *outputFile, size_t numThreads) {
+struct ret_type_t *parseDIMACS(FILE *inputFile, FILE *outputFile) {
   char *oldLocale = setlocale(LC_ALL, NULL);
   setlocale(LC_ALL, "C.UTF-8");
   pthread_mutex_t buffer_lock, output_lock;
   pthread_mutex_init(&buffer_lock, NULL);
   pthread_mutex_init(&output_lock, NULL);
   char buffer[BUFFER_SIZE];
-  char *lineOne[] = {(char*) malloc(sizeof(char) * 3), (char*) malloc(sizeof(char) * 5),
-		     (char*)  malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2),
-                     (char*) malloc(sizeof(char) * (BUFFER_SIZE - 8) / 2)};
-  pthread_t threadIDArray[numThreads];
+  char *lineOne[] = {(char *)malloc(sizeof(char) * 4),
+                     (char *)malloc(sizeof(char) * 6),
+                     (char *)malloc(sizeof(char) * (BUFFER_SIZE - 10) / 2),
+                     (char *)malloc(sizeof(char) * (BUFFER_SIZE - 10) / 2)};
+  memset((void *)lineOne[0], 0, 4);
+  memset((void *)lineOne[1], 0, 6);
+  memset((void *)lineOne[2], 0, (BUFFER_SIZE - 10) / 2);
+  memset((void *)lineOne[3], 0, (BUFFER_SIZE - 10) / 2);
+  pthread_t threadIDArray[NUM_THREADS];
   unsigned char count = 0;
   enum error *return_error = NULL;
-  struct proof_t* proof = (struct proof_t*) malloc(sizeof(proof_t));
+  struct proof_t *proof = (struct proof_t *)malloc(sizeof(proof_t));
   *proof = initProof();
   struct ret_type_t *result = ret_type();
   free(result->buffer);
-  result->buffer = (void*) proof;
+  result->buffer = (void *)proof;
   void *thread_function_input[6];
   char scan_string[50];
   struct ret_type_t
@@ -344,9 +349,17 @@ struct ret_type_t* parseDIMACS(FILE *inputFile, FILE *outputFile, size_t numThre
     fgets(buffer, BUFFER_SIZE, inputFile);
   }
   sprintf(scan_string, " %%3[^ ] %%5[^ ] %%%d[^ ] %%%d[^ \\n] ",
-          (BUFFER_SIZE - 8) / 2, (BUFFER_SIZE - 8) / 2);
-  if (!sscanf(buffer, scan_string, lineOne[0], lineOne[1], lineOne[2],
-              lineOne[3])) {
+          (BUFFER_SIZE - 10) / 2 - 1, (BUFFER_SIZE - 10) / 2 - 1);
+  int returnVal;
+#ifdef __STDC_LIB_EXT1__
+  returnVal =
+      sscanf_s(buffer, scan_string, lineOne[0], 4, lineOne[1], 6, lineOne[2],
+               (BUFFER_SIZE - 10) / 2, lineOne[3], (BUFFER_SIZE - 10) / 2);
+#else
+  returnVal = sscanf(buffer, scan_string, lineOne[0], lineOne[1], lineOne[2],
+                     lineOne[3]);
+#endif
+  if (!returnVal) {
     result->retError = printError(INVALID_CHAR);
     goto freeLineOne;
   }
@@ -366,7 +379,7 @@ struct ret_type_t* parseDIMACS(FILE *inputFile, FILE *outputFile, size_t numThre
   numClauses = NUM_CLAUSES;
   destroyRetType(&function_return);
   while (numClauses) {
-    for (; count < numThreads && count < numClauses; count++) {
+    for (; count < NUM_THREADS && count < numClauses; count++) {
       pthread_mutex_lock(&buffer_lock);
       fgets(buffer, BUFFER_SIZE, inputFile);
       pthread_mutex_unlock(&buffer_lock);
@@ -378,7 +391,7 @@ struct ret_type_t* parseDIMACS(FILE *inputFile, FILE *outputFile, size_t numThre
       thread_function_input[2] = (void *)buffer;
       thread_function_input[3] = (void *)outputFile;
       thread_function_input[4] = (void *)&NUM_VARIABLES;
-      thread_function_input[5] = (void*) proof;
+      thread_function_input[5] = (void *)proof;
       pthread_create(&threadIDArray[count], NULL, parseLine,
                      (void *)thread_function_input);
     }
@@ -464,7 +477,7 @@ proof_t initProof() {
 }
 
 enum error removeClause(proof_t *proof, size_t toRemoveIndex) {
-  clause_t* toRemove = proof->head;
+  clause_t *toRemove = proof->head;
   if (toRemoveIndex == 0) {
     pthread_mutex_lock(&proof->proofMutex);
     proof->head = proof->head->neighbors[1];
@@ -493,7 +506,7 @@ void destroyProof(proof_t *toDestroy) {
   clause_t *toRemove = toDestroy->head;
   while (toRemove) {
     toDestroy->head = toDestroy->head->neighbors[1];
-    if(toRemove->variables){
+    if (toRemove->variables) {
       free(toRemove->variables);
     }
     free(toRemove);
@@ -502,7 +515,7 @@ void destroyProof(proof_t *toDestroy) {
   pthread_mutex_destroy(&toDestroy->proofMutex);
 }
 
-clause_t *getClause(const proof_t * extractFrom, size_t indexToExtract) {
+clause_t *getClause(const proof_t *extractFrom, size_t indexToExtract) {
   struct clause_t *output = extractFrom->head;
   for (size_t index = 0; output; index++) {
     output = output->neighbors[1];
